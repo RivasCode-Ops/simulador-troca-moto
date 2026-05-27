@@ -13,8 +13,15 @@ sys.path.insert(0, str(ROOT))
 
 from src.cenarios import listar_cenarios, premissas_from_inputs  # noqa: E402
 from src.decisao import LimitesDecisao, Semaforo, avaliar_decisao  # noqa: E402
-from src.financiamento import parcela_price  # noqa: E402
+from src.financiamento import parcela_price, taxa_efetiva_anual_pct  # noqa: E402
+from src.decisao import peso_total_ativo  # noqa: E402
+from src.fipe import FipePreco, parse_valor_fipe  # noqa: E402
+from src.fipe_analise import analisar_fipe_vs_venda  # noqa: E402
+from src import persistencia as persistencia  # noqa: E402
+from src.historico import comparar_duas, comparar_duas_para_exibicao  # noqa: E402
 from src.operacao import DadosOperacao, simular_troca  # noqa: E402
+from src.ui import brl, pct, progresso_normalizado, tabela_amortizacao  # noqa: E402
+from src.validacao import tem_erro_bloqueante, validar_entradas  # noqa: E402
 
 
 def _ok(msg: str) -> None:
@@ -49,6 +56,39 @@ def test_cenario_base() -> None:
     _ok("Cenário base (custo extra, parcela, gap ideal)")
 
 
+def test_taxa_efetiva_anual() -> None:
+    t2 = taxa_efetiva_anual_pct(0.02)
+    if abs(t2 - 26.82) > 0.05:
+        _fail(f"2% a.m. → efetiva ~26,82%, veio {t2}")
+    t01 = taxa_efetiva_anual_pct(0.001)
+    if abs(t01 - 1.21) > 0.05:
+        _fail(f"0,1% a.m. → efetiva ~1,21%, veio {t01}")
+    _ok("Taxa efetiva anual composta (2% e 0,1% a.m.)")
+
+
+def test_score_normalizado() -> None:
+    t = simular_troca(DadosOperacao(prazo_compra_meses=36, taxas_contrato_compra=500.0))
+    dec = avaliar_decisao(t, LimitesDecisao())
+    if dec.pontuacao_risco < 0 or dec.pontuacao_risco > 100:
+        _fail(f"score fora de 0–100: {dec.pontuacao_risco}")
+    if dec.semaforo != Semaforo.VERMELHO:
+        _fail("cenário base deveria ser vermelho")
+    if not (54 <= dec.pontuacao_risco <= 58):
+        _fail(f"score normalizado esperado ~56, veio {dec.pontuacao_risco}")
+    if peso_total_ativo(dec.criterios) != 90:
+        _fail("sem limite CET, pesos ativos deveriam somar 90")
+
+    lim_cet = LimitesDecisao(cet_maximo_tolerado_pct=40.0)
+    dec_cet = avaliar_decisao(t, lim_cet)
+    if peso_total_ativo(dec_cet.criterios) != 100:
+        _fail("com limite CET, pesos ativos deveriam somar 100")
+    if dec_cet.pontuacao_risco < 0 or dec_cet.pontuacao_risco > 100:
+        _fail("score com CET fora de 0–100")
+    if dec_cet.semaforo != dec.semaforo:
+        _fail("semáforo deveria ser igual com/sem critério CET (mesmos fatos)")
+    _ok("Score 0–100 com renormalização de pesos")
+
+
 def test_semaforo_vermelho() -> None:
     t = simular_troca(DadosOperacao(prazo_compra_meses=36, taxas_contrato_compra=500.0))
     dec = avaliar_decisao(t, LimitesDecisao())
@@ -56,7 +96,159 @@ def test_semaforo_vermelho() -> None:
         _fail(f"semáforo esperado vermelho, veio {dec.semaforo.value}")
     if dec.custo_extra <= LimitesDecisao().custo_extra_maximo:
         _fail("custo extra deveria ultrapassar limite padrão")
+    if dec.veredito.value != "Melhor esperar ou mudar o plano":
+        _fail("veredito inconsistente com semáforo vermelho")
     _ok("Semáforo vermelho com limites padrão da seção H")
+
+
+def test_parse_fipe() -> None:
+    if parse_valor_fipe("R$ 25.000,00") != 25_000.0:
+        _fail("parse_valor_fipe falhou")
+    _ok("Parse de valor FIPE (R$ brasileiro)")
+
+
+def test_analise_fipe() -> None:
+    fipe = FipePreco(
+        valor=20_000.0,
+        codigo_fipe="123456-7",
+        marca="Honda",
+        modelo="CG",
+        ano_modelo=2020,
+        combustivel="Gasolina",
+        mes_referencia="maio de 2026",
+        tipo_veiculo=2,
+        valor_texto="R$ 20.000,00",
+    )
+    a = analisar_fipe_vs_venda(fipe, preco_venda=25_000.0, custo_extra_troca=9_829.84)
+    if a.diferenca_reais != 5_000.0:
+        _fail(f"diferença esperada 5000, veio {a.diferenca_reais}")
+    if a.cobertura_custo_extra_pct is None or a.cobertura_custo_extra_pct < 50:
+        _fail(f"cobertura esperada ~51%, veio {a.cobertura_custo_extra_pct}")
+    _ok("Análise FIPE vs venda e cobertura do custo extra")
+
+
+def test_persistencia() -> None:
+    import tempfile
+    from pathlib import Path
+
+    orig = persistencia.ARQUIVO
+    with tempfile.TemporaryDirectory() as td:
+        persistencia.ARQUIVO = Path(td) / "simulacoes.json"
+        try:
+            snap = {
+                "id": "test-1",
+                "rotulo": "Teste",
+                "salvo_em": "01/01 00:00",
+                "salvo_em_iso": "2026-01-01T00:00:00",
+                "moto_usada": 25_000.0,
+                "preco_alvo_usada": 25_000.0,
+                "custo_extra": 9_000.0,
+                "semaforo": "vermelho",
+                "pontuacao_risco": 56.0,
+                "veredito": "Melhor esperar ou mudar o plano",
+                "fipe": {"preco_fipe": 20_000.0, "preco_venda": 25_000.0},
+            }
+            persistencia.salvar(snap)
+            lista = persistencia.carregar()
+            if len(lista) != 1 or lista[0]["rotulo"] != "Teste":
+                _fail("persistencia.salvar/carregar falhou")
+            if lista[0].get("veredito") != "Melhor esperar ou mudar o plano":
+                _fail("veredito não persistido")
+            if not persistencia.excluir("test-1"):
+                _fail("excluir deveria retornar True")
+            if persistencia.carregar():
+                _fail("lista deveria estar vazia após excluir")
+        finally:
+            persistencia.ARQUIVO = orig
+    _ok("Persistência JSON (salvar, carregar, excluir)")
+
+
+def test_validacao_dominio_ui() -> None:
+    erros = validar_entradas(0, 30_000, 20_000, 20_000, 2.0, 2.0, 24, 36)
+    if not tem_erro_bloqueante(erros):
+        _fail("valor usada 0 deveria bloquear")
+    if brl(1234.5) != "R$ 1.234,50":
+        _fail(f"brl pt-BR esperado R$ 1.234,50, veio {brl(1234.5)}")
+    if pct(26.82) != "26,82%":
+        _fail(f"pct pt-BR esperado 26,82%, veio {pct(26.82)}")
+    tab = tabela_amortizacao(
+        [{"parcela": 1, "pagamento": 100.0, "juros": 10.0, "amortizacao": 90.0, "saldo": 900.0}]
+    )
+    if "Amortização" not in tab.columns or "R$" not in str(tab.iloc[0]["Pagamento"]):
+        _fail("tabela amortização deveria ter colunas pt-BR e moeda formatada")
+    _ok("Validação de domínio + formatação pt-BR")
+
+
+def test_dominio_entradas() -> None:
+    # P0-2: entrada loja > nova
+    t1 = simular_troca(DadosOperacao(valor_moto_nova=20_000, entrada_loja=25_000))
+    if t1.compra.valor_financiado_principal != 0 or t1.compra.financiamento.valor_financiado > 0.01:
+        _fail(f"financiamento compra deveria ser zero, pv={t1.compra.financiamento.valor_financiado}")
+    if t1.compra.parcela_moto_nova != 0:
+        _fail("parcela compra deveria ser 0")
+    if not any("loja" in a.lower() for a in t1.avisos):
+        _fail("faltou aviso entrada loja")
+
+    # entrada loja == nova
+    t1b = simular_troca(DadosOperacao(valor_moto_nova=20_000, entrada_loja=20_000))
+    if t1b.compra.parcela_moto_nova != 0:
+        _fail("parcela compra deveria ser 0 quando entrada == valor nova")
+
+    # P0-3: entrada comprador > usada
+    t2 = simular_troca(DadosOperacao(valor_moto_usada=20_000, entrada_comprador=25_000))
+    if t2.venda.saldo_financiado != 0:
+        _fail("saldo venda deveria ser 0")
+    if t2.venda.financiamento is not None:
+        _fail("não deveria haver financiamento do comprador")
+    if not any("comprador" in a.lower() for a in t2.avisos):
+        _fail("faltou aviso entrada comprador")
+
+    # entrada comprador == usada
+    t2b = simular_troca(DadosOperacao(valor_moto_usada=20_000, entrada_comprador=20_000))
+    if t2b.venda.saldo_financiado != 0 or t2b.venda.parcela_comprador != 0:
+        _fail("venda sem saldo quando entrada == valor usada")
+
+    _ok("Domínio: entradas >= valor moto (loja e comprador)")
+
+
+def test_comparacao_ab_exibicao() -> None:
+    a = {
+        "custo_extra": 9000.0,
+        "parcela_nova": 400.0,
+        "total_receber_usada": 25000.0,
+        "total_desembolsado": 35000.0,
+        "juros_totais": 4000.0,
+        "semaforo": "vermelho",
+    }
+    b = {**a, "custo_extra": 8000.0, "semaforo": "amarelo"}
+    comparar_duas(a, b, "A", "B")
+    df = comparar_duas_para_exibicao(a, b, "A", "B")
+    sem_row = df[df["Métrica"] == "Semáforo"]
+    if sem_row.empty or "vermelho" not in str(sem_row.iloc[0]["A"]):
+        _fail("linha semáforo deveria preservar texto")
+    if not str(df.iloc[0]["A"]).startswith("R$"):
+        _fail("linha numérica deveria estar em BRL")
+    _ok("Comparação A/B formatada (sem Styler em strings)")
+
+
+def test_progresso_pct_ce() -> None:
+    if progresso_normalizado(-40) != 0.0:
+        _fail("progresso negativo deveria ser 0")
+    if progresso_normalizado(120) != 1.0:
+        _fail("progresso acima de 100% deveria ser 1")
+    if abs(progresso_normalizado(56) - 0.56) > 1e-9:
+        _fail("progresso 56% deveria ser 0.56")
+
+    d_loja = DadosOperacao(valor_moto_nova=30_000.0, entrada_loja=35_000.0)
+    dec_loja = avaliar_decisao(simular_troca(d_loja), LimitesDecisao())
+    if dec_loja.pct_custo_extra_do_limite is not None and dec_loja.pct_custo_extra_do_limite < 0:
+        _fail("pct custo extra vs limite não pode ser negativo")
+
+    d_comp = DadosOperacao(valor_moto_usada=25_000.0, entrada_comprador=30_000.0)
+    dec_comp = avaliar_decisao(simular_troca(d_comp), LimitesDecisao())
+    if dec_comp.pct_custo_extra_do_limite is not None and dec_comp.pct_custo_extra_do_limite < 0:
+        _fail("pct custo extra com entrada comprador alta não pode ser negativo")
+    _ok("Clamp de st.progress e pct_custo_extra_do_limite >= 0")
 
 
 def test_cenarios_lista() -> None:
@@ -86,6 +278,15 @@ def test_cenarios_lista() -> None:
 def main() -> int:
     testes = [
         ("Price", test_price),
+        ("FIPE parse", test_parse_fipe),
+        ("FIPE análise", test_analise_fipe),
+        ("Persistência", test_persistencia),
+        ("Validação UI", test_validacao_dominio_ui),
+        ("Domínio entradas", test_dominio_entradas),
+        ("Comparação A/B", test_comparacao_ab_exibicao),
+        ("Taxa efetiva a.a.", test_taxa_efetiva_anual),
+        ("Score /100", test_score_normalizado),
+        ("Progresso / pct CE", test_progresso_pct_ce),
         ("Cenário base", test_cenario_base),
         ("Semáforo", test_semaforo_vermelho),
         ("Cenários", test_cenarios_lista),

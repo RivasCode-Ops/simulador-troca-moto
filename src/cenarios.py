@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from .financiamento import ResultadoFinanciamento, financiar_price
+from .financiamento import ResultadoFinanciamento, financiamento_vazio, financiar_price
 
 
 @dataclass(frozen=True)
@@ -82,12 +82,15 @@ def _simular_plano(p: Premissas, nome: str, descricao: str, cid: str, destaque: 
         if p.saldo_venda_financiado > 0
         else None
     )
-    fin_compra = financiar_price(
-        p.saldo_compra_financiado,
-        p.taxa_compra_mensal_pct,
-        p.prazo_compra_meses,
-        p.taxas_contrato_compra,
-    )
+    if p.saldo_compra_financiado > 0:
+        fin_compra = financiar_price(
+            p.saldo_compra_financiado,
+            p.taxa_compra_mensal_pct,
+            p.prazo_compra_meses,
+            p.taxas_contrato_compra,
+        )
+    else:
+        fin_compra = financiamento_vazio()
     gap_ideal = p.valor_moto_nova - p.valor_moto_usada
 
     if p.comprador_libera_saldo_na_hora:

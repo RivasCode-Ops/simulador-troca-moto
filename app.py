@@ -22,13 +22,16 @@ from src.decisao import (  # noqa: E402
     cor_semaforo,
     explicar_custo_extra,
     icone_severidade,
+    peso_exibicao_pct,
+    peso_total_ativo,
 )
 from src.exportacao import exportar_csv, exportar_json  # noqa: E402
+from src.fipe_ui import SESSION_FIPE, render_consulta_fipe  # noqa: E402
 from src.historico import (  # noqa: E402
-    MAX_SNAPSHOTS_SESSAO,
+    PERSIST_KEY,
     SESSION_KEY,
     adicionar_ao_historico,
-    comparar_duas,
+    comparar_duas_para_exibicao,
     criar_snapshot,
     dados_grafico_comparacao,
     delta_vs_ultimo_salvo,
@@ -36,8 +39,23 @@ from src.historico import (  # noqa: E402
     listar_opcoes_comparacao,
     rotulo_completo,
 )
+from src.persistencia import carregar as carregar_persistido  # noqa: E402
+from src.persistencia import excluir as excluir_persistido  # noqa: E402
+from src.persistencia import limpar_todos as limpar_persistido  # noqa: E402
+from src.persistencia import salvar as salvar_persistido  # noqa: E402
 from src.operacao import DadosOperacao, simular_troca  # noqa: E402
-from src.ui import brl, pct  # noqa: E402
+from src.sessao_ui import SNAPSHOT_PENDENTE_KEY, aplicar_pendentes_sidebar  # noqa: E402
+from src.ui import (  # noqa: E402
+    brl,
+    delta_brl,
+    pct,
+    progresso_normalizado,
+    rotulo_kpi_risco,
+    tabela_amortizacao,
+    tabela_cenarios_exibicao,
+    texto_banner_semaforo,
+)
+from src.validacao import tem_erro_bloqueante, validar_entradas  # noqa: E402
 
 st.set_page_config(
     page_title="Troca de Moto — Decisão",
@@ -60,19 +78,42 @@ st.markdown(
         padding: 0.65rem 0.85rem;
         border-radius: 8px;
         border: 1px solid #e2e8f0;
+        min-height: 4.75rem;
+    }
+    div[data-testid="stMetric"] label {
+        white-space: normal;
+        line-height: 1.25;
+        overflow: visible;
+        text-overflow: unset;
+        max-width: 100%;
+    }
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        font-size: 1.15rem;
+        overflow-wrap: anywhere;
+    }
+    @media (max-width: 900px) {
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+            font-size: 1rem;
+        }
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+aplicar_pendentes_sidebar()
+
 # ── Sidebar: apenas drivers globais ─────────────────────────────────────────
 with st.sidebar:
     st.title("Parâmetros")
-    valor_usada = st.number_input("Moto usada (R$)", 0.0, 500_000.0, 25_000.0, 500.0)
-    valor_nova = st.number_input("Moto nova (R$)", 0.0, 500_000.0, 30_000.0, 500.0)
-    entrada_comprador = st.number_input("Entrada do comprador (R$)", 0.0, 500_000.0, 20_000.0, 500.0)
-    entrada_loja = st.number_input("Entrada na loja (R$)", 0.0, 500_000.0, 20_000.0, 500.0)
+    valor_usada = st.number_input(
+        "Moto usada (R$)", 0.0, 500_000.0, 25_000.0, 500.0, key="valor_usada"
+    )
+    valor_nova = st.number_input("Moto nova (R$)", 0.0, 500_000.0, 30_000.0, 500.0, key="valor_nova")
+    entrada_comprador = st.number_input(
+        "Entrada do comprador (R$)", 0.0, 500_000.0, 20_000.0, 500.0, key="entrada_comprador"
+    )
+    entrada_loja = st.number_input("Entrada na loja (R$)", 0.0, 500_000.0, 20_000.0, 500.0, key="entrada_loja")
 
     with st.expander("Financiamento do comprador", expanded=False):
         taxa_venda = st.slider("Juros a.m. (%)", 0.0, 5.0, 2.0, 0.1, key="tv")
@@ -84,11 +125,36 @@ with st.sidebar:
         taxa_compra = st.slider("Juros a.m. (%)", 0.0, 5.0, 2.0, 0.1, key="tc")
         prazo_compra = st.selectbox("Prazo (meses)", [12, 18, 24, 36, 48], index=3, key="pc")
         taxas_compra = st.number_input("TAC compra (R$)", 0.0, 10_000.0, 500.0, 50.0, key="tacc")
-        cet_manual = st.number_input("CET loja (%, 0=calc.)", 0.0, 200.0, 0.0, 0.5, key="cet")
+        cet_manual = st.number_input(
+            "Taxa efetiva anual informada (%, 0=calc.)", 0.0, 200.0, 0.0, 0.5, key="cet"
+        )
 
     saldo_venda = max(0.0, valor_usada - entrada_comprador)
     saldo_compra = max(0.0, valor_nova - entrada_loja)
-    st.caption(f"Saldo comprador: **{brl(saldo_venda)}** · Seu saldo: **{brl(saldo_compra)}**")
+    st.markdown(
+        f'<p style="font-size:0.85rem;color:#64748b;margin:0;">'
+        f"Saldo comprador: {brl(saldo_venda)} · Seu saldo: {brl(saldo_compra)}"
+        f"</p>",
+        unsafe_allow_html=True,
+    )
+
+    avisos_dom = validar_entradas(
+        valor_usada,
+        valor_nova,
+        entrada_comprador,
+        entrada_loja,
+        taxa_venda,
+        taxa_compra,
+        prazo_venda,
+        prazo_compra,
+    )
+    for av in avisos_dom:
+        if av.nivel == "erro":
+            st.error(av.mensagem)
+        elif av.nivel == "aviso":
+            st.warning(av.mensagem)
+        else:
+            st.info(av.mensagem)
 
     with st.expander("Limites de decisão (seção H)", expanded=False):
         usar_limites = st.checkbox("Ativar semáforo", value=True, key="lim_ativo")
@@ -101,9 +167,15 @@ with st.sidebar:
             key="lim_prazo",
         )
         entrada_min = st.number_input("Entrada mín. comprador (R$)", 0.0, 500_000.0, 20_000.0, 500.0, key="lim_ent")
-        usar_cet_limite = st.checkbox("Limitar CET", value=False, key="lim_cet_on")
-        cet_max = st.number_input("CET máx. (%)", 0.0, 200.0, 40.0, 1.0, key="lim_cet") if usar_cet_limite else 0.0
+        usar_cet_limite = st.checkbox("Limitar taxa efetiva anual", value=False, key="lim_cet_on")
+        cet_max = (
+            st.number_input("Taxa efetiva máx. (% a.a.)", 0.0, 200.0, 40.0, 1.0, key="lim_cet")
+            if usar_cet_limite
+            else 0.0
+        )
 
+if PERSIST_KEY not in st.session_state:
+    st.session_state[PERSIST_KEY] = carregar_persistido()
 if SESSION_KEY not in st.session_state:
     st.session_state[SESSION_KEY] = []
 
@@ -127,13 +199,24 @@ premissas = premissas_from_inputs(
     taxa_venda, taxa_compra, prazo_venda, prazo_compra, taxas_venda, taxas_compra, libera_saldo,
 )
 
-troca = simular_troca(dados)
-cenarios = listar_cenarios(premissas)
-export_rows = cenarios_para_exportacao(cenarios)
+bloqueio_dom = tem_erro_bloqueante(avisos_dom)
+
+if bloqueio_dom:
+    troca = None
+    cenarios = []
+    export_rows = []
+else:
+    troca = simular_troca(dados)
+    cenarios = listar_cenarios(premissas)
+    export_rows = cenarios_para_exportacao(cenarios)
 
 # ── Main: KPIs + decisão ───────────────────────────────────────────────────
 st.title("🏍️ Troca de moto — decisão financeira")
 st.caption("Simulador de dupla ponta · venda da usada + compra da nova")
+
+if bloqueio_dom:
+    st.error("Corrija os parâmetros na barra lateral para ver a simulação.")
+    st.stop()
 
 limites = LimitesDecisao(
     custo_extra_maximo=custo_extra_max,
@@ -145,49 +228,102 @@ limites = LimitesDecisao(
 )
 decisao = avaliar_decisao(troca, limites)
 explicacao = explicar_custo_extra(troca)
-atual_snap = criar_snapshot("Atual", dados, troca, decisao)
-historico = st.session_state[SESSION_KEY]
-
-emoji_status = {"verde": "🟢", "amarelo": "🟡", "vermelho": "🔴"}[decisao.semaforo.value]
+fipe_sessao = st.session_state.get(SESSION_FIPE)
+limites_snap = {
+    "custo_extra_max": custo_extra_max,
+    "parcela_max": parcela_max,
+    "prazo_max_saldo": prazo_max_saldo,
+    "entrada_min": entrada_min,
+    "usar_limites": usar_limites,
+}
+atual_snap = criar_snapshot(
+    "Atual",
+    dados,
+    troca,
+    decisao,
+    fipe=fipe_sessao,
+    limites_extra=limites_snap,
+)
+historico_sessao = st.session_state[SESSION_KEY]
+historico_persist = st.session_state[PERSIST_KEY]
+historico = historico_persist
 
 # 4 KPIs principais
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("Custo extra da troca", brl(troca.custo_extra_vs_ideal))
-k2.metric("Parcela moto nova", brl(troca.compra.parcela_moto_nova))
-k3.metric("Total a receber (usada)", brl(troca.venda.total_recebido_pelo_vendedor))
-k4.metric("Risco / Status", f"{decisao.pontuacao_risco:.0f}/100 · {emoji_status}")
+k1.metric("Custo extra", brl(troca.custo_extra_vs_ideal))
+k2.metric("Parcela nova", brl(troca.compra.parcela_moto_nova))
+k3.metric("Receber (usada)", brl(troca.venda.total_recebido_pelo_vendedor))
+k4.metric("Risco", rotulo_kpi_risco(decisao))
 
 cor = cor_semaforo(decisao.semaforo)
+titulo_banner, msg_banner = texto_banner_semaforo(decisao)
 st.markdown(
     f'<div class="semaforo-box" style="background:{cor}18;border-left:5px solid {cor};">'
-    f"<strong>{decisao.veredito.value}</strong> — {decisao.mensagem}</div>",
+    f"<strong>{titulo_banner}</strong> — {msg_banner}</div>",
     unsafe_allow_html=True,
 )
 
-with st.expander("📋 Histórico desta sessão", expanded=bool(historico)):
+render_consulta_fipe(valor_usada, troca.custo_extra_vs_ideal)
+
+with st.expander("📋 Histórico salvo (persistente)", expanded=bool(historico)):
     rotulo_save = st.text_input("Nome da simulação", placeholder="Ex.: Proposta loja X", key="rotulo_hist")
-    h1, h2 = st.columns(2)
-    if h1.button("Salvar simulação", type="primary"):
-        snap = criar_snapshot(rotulo_save, dados, troca, decisao)
-        st.session_state[SESSION_KEY] = adicionar_ao_historico(historico, snap)
-        st.toast(f"Salvo: {snap['rotulo']}")
+    h1, h2, h3 = st.columns(3)
+    if h1.button("Salvar no disco", type="primary"):
+        snap = criar_snapshot(
+            rotulo_save,
+            dados,
+            troca,
+            decisao,
+            fipe=fipe_sessao,
+            limites_extra=limites_snap,
+        )
+        salvar_persistido(snap)
+        st.session_state[PERSIST_KEY] = carregar_persistido()
+        st.session_state[SESSION_KEY] = adicionar_ao_historico(historico_sessao, snap)
+        st.session_state["cmp_b"] = rotulo_completo(snap)
+        st.success(f"Simulação salva: {snap['rotulo']}")
+        st.toast(f"Salvo em data/simulacoes.json")
         st.rerun()
-    if h2.button("Limpar histórico", disabled=not historico):
+    if h2.button("Limpar tudo no disco", disabled=not historico):
+        limpar_persistido()
+        st.session_state[PERSIST_KEY] = []
         st.session_state[SESSION_KEY] = []
         st.rerun()
-    st.caption(f"Até {MAX_SNAPSHOTS_SESSAO} simulações nesta sessão · {len(historico)} salva(s)")
+    if h3.button("Recarregar lista"):
+        st.session_state[PERSIST_KEY] = carregar_persistido()
+        st.rerun()
+    st.caption(
+        f"Arquivo local: `data/simulacoes.json` · {len(historico)} registro(s) · "
+        "inclui consulta FIPE quando disponível"
+    )
+
+    if historico:
+        opcoes_restaurar = {rotulo_completo(s): s for s in historico}
+        rotulos_rest = list(opcoes_restaurar.keys())
+        sel_rest = st.selectbox("Reabrir simulação salva", rotulos_rest, key="hist_restaurar")
+        c_rest, c_del = st.columns(2)
+        if c_rest.button("Carregar parâmetros na sidebar"):
+            st.session_state[SNAPSHOT_PENDENTE_KEY] = opcoes_restaurar[sel_rest]
+            st.toast("Carregando parâmetros na sidebar…")
+            st.rerun()
+        if c_del.button("Excluir selecionada"):
+            reg = opcoes_restaurar[sel_rest]
+            excluir_persistido(reg["id"])
+            st.session_state[PERSIST_KEY] = carregar_persistido()
+            st.toast(f"Removido: {reg['rotulo']}")
+            st.rerun()
     df_hist = pd.DataFrame(linhas_comparacao(atual_snap, historico))
     st.dataframe(df_hist, use_container_width=True, hide_index=True)
     deltas = delta_vs_ultimo_salvo(atual_snap, historico)
     if deltas:
         st.caption(
-            f"Δ em relação à última salva: custo extra {deltas['custo_extra']:+,.2f} · "
-            f"parcela {deltas['parcela_nova']:+,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            f"Δ vs última salva: custo extra {delta_brl(deltas['custo_extra'])} · "
+            f"parcela {delta_brl(deltas['parcela_nova'])}"
         )
 
     opcoes = listar_opcoes_comparacao(atual_snap, historico)
     if len(opcoes) >= 2:
-        st.markdown("**Comparar duas simulações lado a lado**")
+        st.markdown("**Comparar duas simulações**")
         labels = []
         snaps: dict[str, dict] = {}
         for oid, snap in opcoes:
@@ -210,17 +346,8 @@ with st.expander("📋 Histórico desta sessão", expanded=bool(historico)):
             st.warning("Escolha duas simulações diferentes para comparar.")
         else:
             sa, sb = snaps[nome_a], snaps[nome_b]
-            df_cmp = pd.DataFrame(comparar_duas(sa, sb, nome_a, nome_b))
-            st.dataframe(
-                df_cmp.style.format(
-                    {nome_a: "{:,.2f}", nome_b: "{:,.2f}", "Delta (B − A)": "{:+,.2f}"},
-                    decimal=",",
-                    thousands=".",
-                    na_rep="—",
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
+            df_cmp = comparar_duas_para_exibicao(sa, sb, nome_a, nome_b)
+            st.dataframe(df_cmp, use_container_width=True, hide_index=True)
             chart = dados_grafico_comparacao(sa, sb, nome_a, nome_b)
             st.bar_chart(pd.DataFrame(chart).set_index("Métrica")[[nome_a, nome_b]])
             melhor_custo = nome_a if sa["custo_extra"] <= sb["custo_extra"] else nome_b
@@ -228,14 +355,22 @@ with st.expander("📋 Histórico desta sessão", expanded=bool(historico)):
 
 with st.expander("🚦 Análise do semáforo", expanded=decisao.semaforo != Semaforo.VERDE):
     if limites.usar_limites and decisao.criterios:
-        st.progress(min(decisao.pontuacao_risco / 100, 1.0))
-        st.caption(f"Pontuação de risco: **{decisao.pontuacao_risco:.0f}/100** (peso por critério da seção H)")
+        peso_total = peso_total_ativo(decisao.criterios)
+        st.progress(progresso_normalizado(decisao.pontuacao_risco))
+        st.caption(
+            f"Pontuação de risco: **{decisao.pontuacao_risco:.0f}/100** "
+            f"(pesos ativos somam {peso_total:.0f} → normalizados para 100)"
+        )
         df_crit = pd.DataFrame(
             [
                 {
                     "": icone_severidade(c.severidade),
                     "Critério": c.nome,
-                    "Peso": f"{c.peso}%",
+                    "Peso": (
+                        f"{peso_exibicao_pct(c, peso_total):.0f}%"
+                        if c.peso > 0
+                        else "—"
+                    ),
                     "Uso do limite": f"{c.pct_do_limite:.0f}%",
                     "Status": c.status_label,
                     "Mensagem": c.mensagem,
@@ -256,7 +391,7 @@ with st.expander("📐 Como calculamos o custo extra", expanded=False):
     for linha in explicacao.detalhe_linhas:
         st.markdown(f"- {linha}")
     if decisao.pct_custo_extra_do_limite is not None:
-        st.progress(min(decisao.pct_custo_extra_do_limite / 100, 1.0))
+        st.progress(progresso_normalizado(decisao.pct_custo_extra_do_limite))
         st.caption(f"Custo extra = {decisao.pct_custo_extra_do_limite:.0f}% do limite máximo definido")
 
 # ── Bloco 2: Venda ───────────────────────────────────────────────────────────
@@ -270,7 +405,7 @@ r4.metric("Total que você recebe", brl(v.total_recebido_pelo_vendedor))
 st.caption(v.observacao_recebimento)
 if v.financiamento and v.saldo_financiado > 0:
     with st.expander("Amortização — comprador"):
-        st.dataframe(pd.DataFrame(v.financiamento.tabela), use_container_width=True, hide_index=True)
+        st.dataframe(tabela_amortizacao(v.financiamento.tabela), use_container_width=True, hide_index=True)
 
 # ── Bloco 3: Compra ──────────────────────────────────────────────────────────
 st.header("3 · Compra da nova")
@@ -280,14 +415,21 @@ c1.metric("Valor financiado", brl(cp.financiamento.valor_financiado))
 c2.metric("Parcela", brl(cp.parcela_moto_nova))
 c3.metric("Total pago ao banco", brl(cp.total_pago_banco))
 c4.metric("Juros totais", brl(cp.juros_totais))
-st.caption(f"CET calc.: {pct(cp.cet_calculado_pct)} · CET informado: {pct(cp.cet_informado_pct) if cp.cet_informado_pct else '—'}")
+fin = cp.financiamento
+st.caption(
+    f"Juros: {pct(fin.taxa_mensal * 100)} a.m. · "
+    f"Nominal a.a.: {pct(fin.taxa_nominal_anual_pct)} · "
+    f"Efetiva a.a. (calc.): {pct(fin.taxa_efetiva_anual_pct)} · "
+    f"Custo total no prazo: {pct(fin.custo_total_prazo_pct)} · "
+    f"Informada: {pct(cp.cet_informado_pct) if cp.cet_informado_pct else '—'}"
+)
 tab_t, tab_g = st.tabs(["Tabela", "Gráfico"])
-df_amort = pd.DataFrame(cp.financiamento.tabela)
+df_amort_raw = pd.DataFrame(cp.financiamento.tabela)
 with tab_t:
-    st.dataframe(df_amort, use_container_width=True, hide_index=True)
+    st.dataframe(tabela_amortizacao(cp.financiamento.tabela), use_container_width=True, hide_index=True)
 with tab_g:
-    if not df_amort.empty:
-        st.line_chart(df_amort.set_index("parcela")[["saldo", "juros"]])
+    if not df_amort_raw.empty:
+        st.line_chart(df_amort_raw.set_index("parcela")[["saldo", "juros"]])
 
 # ── Bloco 4: Comparação e cenários ───────────────────────────────────────────
 st.header("4 · Comparação e cenários")
@@ -305,20 +447,7 @@ df_cen = pd.DataFrame(
         for c in cenarios
     ]
 )
-st.dataframe(
-    df_cen.style.highlight_max(subset=["Custo extra"], color="#fecaca").format(
-        {
-            "À vista": "{:,.2f}",
-            "Total": "{:,.2f}",
-            "Parcela nova": "{:,.2f}",
-            "Custo extra": "{:,.2f}",
-        },
-        decimal=",",
-        thousands=".",
-    ),
-    use_container_width=True,
-    hide_index=True,
-)
+st.dataframe(tabela_cenarios_exibicao(df_cen), use_container_width=True, hide_index=True)
 
 alt = [c for c in cenarios if c.id != "ideal" and c.id != "plano_atual"]
 if alt:

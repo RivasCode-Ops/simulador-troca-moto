@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .financiamento import ResultadoFinanciamento, financiar_price
+from .financiamento import ResultadoFinanciamento, financiamento_vazio, financiar_price
 
 
 @dataclass(frozen=True)
@@ -67,6 +67,26 @@ class ResultadoTroca:
     juros_embutidos_venda_comprador: float
     saldo_liquido_juros: float
     juros_total_seu_bolso: float
+    avisos: tuple[str, ...] = ()
+
+
+def _coletar_avisos(d: DadosOperacao, saldo_venda: float, saldo_compra: float) -> tuple[str, ...]:
+    msgs: list[str] = []
+    if d.entrada_comprador > d.valor_moto_usada:
+        msgs.append(
+            "Comprador paga mais que o valor da moto usada — não há saldo a financiar para o comprador."
+        )
+    elif d.entrada_comprador == d.valor_moto_usada and d.valor_moto_usada > 0:
+        msgs.append("Entrada do comprador igual ao valor da usada — saldo financiado do comprador será zero.")
+
+    if d.entrada_loja > d.valor_moto_nova:
+        msgs.append(
+            "Entrada na loja maior que o valor da moto nova — financiamento da compra será zero."
+        )
+    elif d.entrada_loja == d.valor_moto_nova and d.valor_moto_nova > 0:
+        msgs.append("Entrada na loja igual ao valor da moto nova — financiamento da compra será zero.")
+
+    return tuple(msgs)
 
 
 def _financiar_se_positivo(
@@ -98,7 +118,9 @@ def simular_troca(d: DadosOperacao) -> ResultadoTroca:
         d.taxas_contrato_compra,
     )
     if fin_compra is None:
-        fin_compra = financiar_price(0.01, d.taxa_compra_mensal_pct, 1, 0)
+        fin_compra = financiamento_vazio()
+
+    avisos = _coletar_avisos(d, saldo_venda, saldo_compra)
 
     if d.comprador_libera_saldo_na_hora:
         total_recebido = d.entrada_comprador + saldo_venda
@@ -164,4 +186,5 @@ def simular_troca(d: DadosOperacao) -> ResultadoTroca:
             2,
         ),
         juros_total_seu_bolso=round(juros_pagos, 2),
+        avisos=avisos,
     )

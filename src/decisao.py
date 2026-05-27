@@ -182,6 +182,29 @@ def _criterio_piso(cid: str, nome: str, peso: int, valor: float, limite: float, 
     )
 
 
+def _peso_total_ativo(criterios: list[CriterioDecisao]) -> float:
+    return float(sum(c.peso for c in criterios if c.peso > 0))
+
+
+def _pontuacao_normalizada(criterios: list[CriterioDecisao]) -> float:
+    """Escala pontos brutos para 0–100 conforme pesos ativos (renormalização)."""
+    total = _peso_total_ativo(criterios)
+    if total <= 0:
+        return 0.0
+    bruto = sum(c.pontos_risco for c in criterios if c.peso > 0)
+    return round(min(100.0, bruto / total * 100), 1)
+
+
+def peso_total_ativo(criterios: list[CriterioDecisao]) -> float:
+    return _peso_total_ativo(criterios)
+
+
+def peso_exibicao_pct(criterio: CriterioDecisao, peso_total_ativo: float) -> float:
+    if peso_total_ativo <= 0 or criterio.peso <= 0:
+        return 0.0
+    return round(criterio.peso / peso_total_ativo * 100, 1)
+
+
 def _semaforo_final(criterios: list[CriterioDecisao], pontuacao: float) -> tuple[Semaforo, Veredito, str, list[str]]:
     criticos = [c for c in criterios if c.severidade == Severidade.CRITICO]
     atencoes = [c for c in criterios if c.severidade == Severidade.ATENCAO]
@@ -197,8 +220,8 @@ def _semaforo_final(criterios: list[CriterioDecisao], pontuacao: float) -> tuple
             acoes.append("Exija liberação imediata do saldo financiado ou junte caixa para o gap.")
         elif c.id == "entrada_comprador":
             acoes.append("Negocie entrada mínima maior com o comprador da usada.")
-        elif c.id == "cet":
-            acoes.append("Compare CET em outra financeira ou concessionária.")
+        elif c.id == "taxa_efetiva":
+            acoes.append("Compare taxa efetiva anual em outra financeira ou concessionária.")
         elif c.id == "risco_caixa":
             acoes.append("Adie a troca até cobrir a diferença à vista.")
 
@@ -220,7 +243,12 @@ def _semaforo_final(criterios: list[CriterioDecisao], pontuacao: float) -> tuple
 
 def avaliar_decisao(troca: ResultadoTroca, limites: LimitesDecisao) -> ResultadoDecisao:
     ce = troca.custo_extra_vs_ideal
-    pct_ce = round(ce / limites.custo_extra_maximo * 100, 1) if limites.custo_extra_maximo > 0 else None
+    if limites.custo_extra_maximo > 0:
+        pct_ce = round(ce / limites.custo_extra_maximo * 100, 1)
+        if pct_ce < 0:
+            pct_ce = 0.0
+    else:
+        pct_ce = None
 
     if not limites.usar_limites:
         return ResultadoDecisao(
@@ -239,7 +267,7 @@ def avaliar_decisao(troca: ResultadoTroca, limites: LimitesDecisao) -> Resultado
     par = troca.compra.parcela_moto_nova
     prazo = float(troca.venda.prazo_recebimento_saldo_meses)
     ent = troca.dados.entrada_comprador
-    cet = troca.compra.cet_informado_pct or troca.compra.cet_calculado_pct
+    taxa_efetiva = troca.compra.cet_informado_pct or troca.compra.cet_calculado_pct
 
     criterios = [
         _criterio_teto(
@@ -287,18 +315,24 @@ def avaliar_decisao(troca: ResultadoTroca, limites: LimitesDecisao) -> Resultado
         ),
     ]
 
-    if limites.cet_maximo_tolerado_pct is not None and cet is not None:
+    if limites.cet_maximo_tolerado_pct is not None and taxa_efetiva is not None:
         criterios.append(
             _criterio_teto(
-                "cet",
-                "CET compra",
+                "taxa_efetiva",
+                "Taxa efetiva anual (compra)",
                 PESOS["cet"],
-                cet,
+                taxa_efetiva,
                 limites.cet_maximo_tolerado_pct,
-                "%",
-                ok=f"CET {cet:.1f}% dentro do teto {limites.cet_maximo_tolerado_pct:.1f}%.",
-                atencao=f"CET {cet:.1f}% próximo do teto ({cet / limites.cet_maximo_tolerado_pct * 100:.0f}%).",
-                critico=f"CET {cet:.1f}% acima do teto {limites.cet_maximo_tolerado_pct:.1f}%.",
+                "% a.a.",
+                ok=f"Taxa efetiva {taxa_efetiva:.2f}% a.a. dentro do teto {limites.cet_maximo_tolerado_pct:.1f}%.",
+                atencao=(
+                    f"Taxa efetiva {taxa_efetiva:.2f}% a.a. próxima do teto "
+                    f"({taxa_efetiva / limites.cet_maximo_tolerado_pct * 100:.0f}%)."
+                ),
+                critico=(
+                    f"Taxa efetiva {taxa_efetiva:.2f}% a.a. acima do teto "
+                    f"{limites.cet_maximo_tolerado_pct:.1f}%."
+                ),
             )
         )
 
@@ -319,7 +353,7 @@ def avaliar_decisao(troca: ResultadoTroca, limites: LimitesDecisao) -> Resultado
             )
         )
 
-    pontuacao = round(sum(c.pontos_risco for c in criterios), 1)
+    pontuacao = _pontuacao_normalizada(criterios)
     sem, ver, msg, acoes = _semaforo_final(criterios, pontuacao)
 
     falhas = [c.mensagem for c in criterios if c.severidade == Severidade.CRITICO]
