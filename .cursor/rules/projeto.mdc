@@ -1,0 +1,10 @@
+---
+description: Simulador Troca de Moto — decisão financeira pessoal. Seguir escopo do prompt mestre; sem features extras.
+alwaysApply: true
+---
+
+# Simulador Troca de Moto
+
+- App local Streamlit: venda usada + compra nova + custo extra + cenários + semáforo H.
+- Módulos: `financiamento`, `operacao`, `decisao`, `cenarios`, `historico`, `exportacao`.
+- Histórico: `st.session_state` (máx. 5). README congelado; não expandir docs/copy sem pedido.
