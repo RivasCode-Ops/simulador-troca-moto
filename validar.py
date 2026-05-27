@@ -20,7 +20,13 @@ from src.fipe_analise import analisar_fipe_vs_venda  # noqa: E402
 from src import persistencia as persistencia  # noqa: E402
 from src.historico import comparar_duas, comparar_duas_para_exibicao  # noqa: E402
 from src.operacao import DadosOperacao, simular_troca  # noqa: E402
-from src.ui import brl, pct, progresso_normalizado, tabela_amortizacao  # noqa: E402
+from src.ui import (  # noqa: E402
+    brl,
+    mensagem_banner_resumo,
+    pct,
+    progresso_normalizado,
+    tabela_amortizacao,
+)
 from src.validacao import tem_erro_bloqueante, validar_entradas  # noqa: E402
 
 
@@ -231,6 +237,26 @@ def test_comparacao_ab_exibicao() -> None:
     _ok("Comparação A/B formatada (sem Styler em strings)")
 
 
+def test_banner_semaforo() -> None:
+    loja = avaliar_decisao(simular_troca(DadosOperacao(entrada_loja=35_000)), LimitesDecisao())
+    base = avaliar_decisao(simular_troca(DadosOperacao()), LimitesDecisao())
+
+    msg_verde = mensagem_banner_resumo(loja)
+    if "Reprovado" in msg_verde or "inviável" in msg_verde:
+        _fail(f"banner verde não deve citar reprovação: {msg_verde}")
+    if loja.semaforo != Semaforo.VERDE:
+        _fail("entrada loja alta deveria ser semáforo verde")
+
+    msg_vermelho = mensagem_banner_resumo(base)
+    if base.semaforo != Semaforo.VERMELHO:
+        _fail("cenário base deveria ser vermelho")
+    if msg_vermelho.startswith("Reprovado:"):
+        _fail("banner não deve repetir prefixo Reprovado:")
+    if "inviável" not in msg_vermelho and "limite" not in msg_vermelho:
+        _fail(f"mensagem vermelha esperada sobre limites: {msg_vermelho}")
+    _ok("Banner alinhado ao semáforo (sem texto estático de reprovação no verde)")
+
+
 def test_progresso_pct_ce() -> None:
     if progresso_normalizado(-40) != 0.0:
         _fail("progresso negativo deveria ser 0")
@@ -286,6 +312,7 @@ def main() -> int:
         ("Comparação A/B", test_comparacao_ab_exibicao),
         ("Taxa efetiva a.a.", test_taxa_efetiva_anual),
         ("Score /100", test_score_normalizado),
+        ("Banner semáforo", test_banner_semaforo),
         ("Progresso / pct CE", test_progresso_pct_ce),
         ("Cenário base", test_cenario_base),
         ("Semáforo", test_semaforo_vermelho),

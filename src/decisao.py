@@ -133,6 +133,19 @@ def _criterio_teto(
     atencao: str,
     critico: str,
 ) -> CriterioDecisao:
+    if cid == "custo_extra" and valor <= 0:
+        return CriterioDecisao(
+            id=cid,
+            nome=nome,
+            peso=peso,
+            valor_atual=valor,
+            limite=limite,
+            unidade=unidade,
+            pct_do_limite=0.0,
+            severidade=Severidade.OK,
+            mensagem=f"Custo extra {_brl(valor)} — abaixo do ideal (favorável).",
+            pontos_risco=0.0,
+        )
     pct = (valor / limite * 100) if limite > 0 else (100.0 if valor > 0 else 0.0)
     if valor > limite:
         sev, pts = Severidade.CRITICO, float(peso)
@@ -228,15 +241,21 @@ def _semaforo_final(criterios: list[CriterioDecisao], pontuacao: float) -> tuple
     if criticos:
         sem, ver = Semaforo.VERMELHO, Veredito.REPROVADO
         if "custo_extra" in ids or "parcela" in ids:
-            msg = "Reprovado: custo extra ou parcela inviáveis — não feche sem renegociar."
+            msg = "Custo extra ou parcela inviáveis — não feche sem renegociar."
         else:
-            msg = f"Reprovado: {len(criticos)} critério(s) crítico(s)."
+            msg = f"{len(criticos)} critério(s) crítico(s) — revise antes de fechar."
     elif pontuacao >= 25 or atencoes:
         sem, ver = Semaforo.AMARELO, Veredito.CARO
-        msg = f"Atenção: risco {pontuacao:.0f}/100 — {len(atencoes)} alerta(s) intermediário(s). Negocie antes de assinar."
+        msg = (
+            f"Risco {pontuacao:.0f}/100 — {len(atencoes)} alerta(s) intermediário(s). "
+            "Negocie antes de assinar."
+        )
     else:
         sem, ver = Semaforo.VERDE, Veredito.ACEITAVEL
-        msg = f"Aprovado (risco {pontuacao:.0f}/100). Compare com cenários salvos no histórico."
+        msg = (
+            f"Dentro dos limites (risco {pontuacao:.0f}/100). "
+            "Compare com cenários salvos no histórico."
+        )
 
     return sem, ver, msg, list(dict.fromkeys(acoes))[:4]
 

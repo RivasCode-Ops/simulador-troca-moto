@@ -53,7 +53,8 @@ from src.ui import (  # noqa: E402
     rotulo_kpi_risco,
     tabela_amortizacao,
     tabela_cenarios_exibicao,
-    texto_banner_semaforo,
+    html_banner_semaforo,
+    md_escape,
 )
 from src.validacao import tem_erro_bloqueante, validar_entradas  # noqa: E402
 
@@ -74,22 +75,43 @@ st.markdown(
         font-size: 1rem;
     }
     div[data-testid="stMetric"] {
-        background: #f1f5f9;
+        background: rgba(255, 255, 255, 0.06);
         padding: 0.65rem 0.85rem;
         border-radius: 8px;
-        border: 1px solid #e2e8f0;
+        border: 1px solid rgba(255, 255, 255, 0.12);
         min-height: 4.75rem;
     }
+    div[data-testid="stMetric"] label,
+    div[data-testid="stMetric"] [data-testid="stMetricValue"],
+    div[data-testid="stMetric"] [data-testid="stMetricDelta"] svg {
+        color: #f1f5f9 !important;
+        fill: #f1f5f9 !important;
+    }
     div[data-testid="stMetric"] label {
-        white-space: normal;
+        white-space: normal !important;
         line-height: 1.25;
-        overflow: visible;
-        text-overflow: unset;
+        overflow: visible !important;
+        text-overflow: clip !important;
         max-width: 100%;
+        word-break: break-word;
     }
     div[data-testid="stMetric"] [data-testid="stMetricValue"] {
         font-size: 1.15rem;
         overflow-wrap: anywhere;
+        color: #ffffff !important;
+    }
+    @media (prefers-color-scheme: light) {
+        div[data-testid="stMetric"] {
+            background: #f1f5f9;
+            border-color: #e2e8f0;
+        }
+        div[data-testid="stMetric"] label,
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+            color: #0f172a !important;
+        }
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+            color: #020617 !important;
+        }
     }
     @media (max-width: 900px) {
         div[data-testid="stMetric"] [data-testid="stMetricValue"] {
@@ -252,16 +274,11 @@ historico = historico_persist
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("Custo extra", brl(troca.custo_extra_vs_ideal))
 k2.metric("Parcela nova", brl(troca.compra.parcela_moto_nova))
-k3.metric("Receber (usada)", brl(troca.venda.total_recebido_pelo_vendedor))
+k3.metric("Receb. usada", brl(troca.venda.total_recebido_pelo_vendedor))
 k4.metric("Risco", rotulo_kpi_risco(decisao))
 
 cor = cor_semaforo(decisao.semaforo)
-titulo_banner, msg_banner = texto_banner_semaforo(decisao)
-st.markdown(
-    f'<div class="semaforo-box" style="background:{cor}18;border-left:5px solid {cor};">'
-    f"<strong>{titulo_banner}</strong> — {msg_banner}</div>",
-    unsafe_allow_html=True,
-)
+st.markdown(html_banner_semaforo(decisao, cor), unsafe_allow_html=True)
 
 render_consulta_fipe(valor_usada, troca.custo_extra_vs_ideal)
 
@@ -313,12 +330,22 @@ with st.expander("📋 Histórico salvo (persistente)", expanded=bool(historico)
             st.toast(f"Removido: {reg['rotulo']}")
             st.rerun()
     df_hist = pd.DataFrame(linhas_comparacao(atual_snap, historico))
-    st.dataframe(df_hist, use_container_width=True, hide_index=True)
+    st.dataframe(
+        df_hist,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "FIPE": st.column_config.TextColumn("FIPE", width="medium"),
+            "Nome": st.column_config.TextColumn("Nome", width="small"),
+        },
+    )
     deltas = delta_vs_ultimo_salvo(atual_snap, historico)
     if deltas:
-        st.caption(
-            f"Δ vs última salva: custo extra {delta_brl(deltas['custo_extra'])} · "
-            f"parcela {delta_brl(deltas['parcela_nova'])}"
+        st.markdown(
+            md_escape(
+                f"Δ vs última salva: custo extra {delta_brl(deltas['custo_extra'])} · "
+                f"parcela {delta_brl(deltas['parcela_nova'])}"
+            )
         )
 
     opcoes = listar_opcoes_comparacao(atual_snap, historico)
@@ -416,12 +443,14 @@ c2.metric("Parcela", brl(cp.parcela_moto_nova))
 c3.metric("Total pago ao banco", brl(cp.total_pago_banco))
 c4.metric("Juros totais", brl(cp.juros_totais))
 fin = cp.financiamento
-st.caption(
-    f"Juros: {pct(fin.taxa_mensal * 100)} a.m. · "
-    f"Nominal a.a.: {pct(fin.taxa_nominal_anual_pct)} · "
-    f"Efetiva a.a. (calc.): {pct(fin.taxa_efetiva_anual_pct)} · "
-    f"Custo total no prazo: {pct(fin.custo_total_prazo_pct)} · "
-    f"Informada: {pct(cp.cet_informado_pct) if cp.cet_informado_pct else '—'}"
+st.markdown(
+    md_escape(
+        f"Juros: {pct(fin.taxa_mensal * 100)} ao mês · "
+        f"Nominal a.a.: {pct(fin.taxa_nominal_anual_pct)} · "
+        f"Efetiva a.a. (calc.): {pct(fin.taxa_efetiva_anual_pct)} · "
+        f"Custo total no prazo (sobre principal): {pct(fin.custo_total_prazo_pct)} · "
+        f"Informada: {pct(cp.cet_informado_pct) if cp.cet_informado_pct else '—'}"
+    )
 )
 tab_t, tab_g = st.tabs(["Tabela", "Gráfico"])
 df_amort_raw = pd.DataFrame(cp.financiamento.tabela)
@@ -452,7 +481,11 @@ st.dataframe(tabela_cenarios_exibicao(df_cen), use_container_width=True, hide_in
 alt = [c for c in cenarios if c.id != "ideal" and c.id != "plano_atual"]
 if alt:
     melhor = min(alt, key=lambda x: x.custo_extra_vs_ideal)
-    st.info(f"**Melhor alternativa:** {melhor.nome} — custo extra {brl(melhor.custo_extra_vs_ideal)}")
+    st.info(
+        md_escape(
+            f"**Melhor alternativa:** {melhor.nome} — custo extra {brl(melhor.custo_extra_vs_ideal)}"
+        )
+    )
 
 # Exportação
 st.subheader("Exportar simulação")

@@ -177,7 +177,7 @@ def linhas_comparacao(atual: dict, historico: list[dict]) -> list[dict]:
         pf = f.get("preco_fipe")
         if pf is None:
             return "—"
-        return f"R$ {pf:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return brl(float(pf))
 
     def _veredito_curto(s: dict) -> str:
         v = s.get("veredito")

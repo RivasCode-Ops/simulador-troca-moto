@@ -7,7 +7,7 @@ import streamlit as st
 from .fipe import FipeApiError, consultar_preco, listar_anos, listar_marcas, listar_modelos
 from .sessao_ui import PENDING_VALOR_USADA_KEY
 from .fipe_analise import analisar_fipe_vs_venda
-from .ui import brl, pct
+from .ui import brl, md_escape, pct
 
 SESSION_FIPE = "fipe_ultima_consulta"
 
@@ -88,7 +88,9 @@ def render_consulta_fipe(preco_venda: float, custo_extra: float) -> None:
             ano_nome = st.selectbox("Ano / modelo", nomes_anos, key="fipe_ano")
         cod_ano = mapa_anos[ano_nome]
 
-        st.caption(f"Seu preço de venda (moto usada): **{brl(preco_venda)}**")
+        st.markdown(
+            md_escape(f"Preço alvo da usada (sidebar): **{brl(preco_venda)}**")
+        )
 
         if st.button("Buscar FIPE", type="primary", key="fipe_buscar"):
             with st.spinner("Consultando tabela FIPE…"):
@@ -125,26 +127,38 @@ def render_consulta_fipe(preco_venda: float, custo_extra: float) -> None:
 
         if a.diferenca_reais > 0:
             st.success(
-                f"Você pede **{brl(a.diferenca_reais)}** ({pct(a.diferenca_pct)}) acima da FIPE."
+                md_escape(
+                    f"Você pede **{brl(a.diferenca_reais)}** ({pct(a.diferenca_pct)}) acima da FIPE."
+                )
             )
             if a.cobertura_custo_extra_pct is not None and custo_extra > 0:
                 if a.cobertura_custo_extra_pct >= 100:
                     st.info(
-                        f"O sobrepreço cobre **100%** do custo extra ({brl(custo_extra)})."
+                        md_escape(
+                            f"O sobrepreço cobre **100%** do custo extra ({brl(custo_extra)})."
+                        )
                     )
                 else:
                     st.warning(
-                        f"O sobrepreço cobre **{a.cobertura_custo_extra_pct:.0f}%** do custo extra. "
-                        f"Mesmo acima da FIPE, ainda faltam **{brl(a.perda_apos_fipe or 0)}** para compensar juros e risco."
+                        md_escape(
+                            f"O sobrepreço cobre **{a.cobertura_custo_extra_pct:.0f}%** do custo extra. "
+                            f"Mesmo acima da FIPE, ainda faltam **{brl(a.perda_apos_fipe or 0)}** "
+                            "para compensar juros e risco."
+                        )
                     )
         elif a.diferenca_reais < 0:
             st.error(
-                f"Você pede **{brl(abs(a.diferenca_reais))}** abaixo da FIPE "
-                f"({abs(a.diferenca_pct):.1f}%) — negociação mais difícil."
+                md_escape(
+                    f"Você pede **{brl(abs(a.diferenca_reais))}** abaixo da FIPE "
+                    f"({abs(a.diferenca_pct):.1f}%) — negociação mais difícil."
+                )
             )
             if custo_extra > 0:
-                st.caption(
-                    f"Custo extra da troca: **{brl(custo_extra)}** — vender abaixo da FIPE não gera folga para cobrir."
+                st.markdown(
+                    md_escape(
+                        f"Custo extra da troca: **{brl(custo_extra)}** — "
+                        "vender abaixo da FIPE não gera folga para cobrir."
+                    )
                 )
         else:
             st.info("Preço alvo igual à FIPE — referência neutra de mercado.")
