@@ -44,6 +44,8 @@ from src.persistencia import excluir as excluir_persistido  # noqa: E402
 from src.persistencia import limpar_todos as limpar_persistido  # noqa: E402
 from src.persistencia import salvar as salvar_persistido  # noqa: E402
 from src.operacao import DadosOperacao, simular_troca  # noqa: E402
+from src.relatorio import montar_relatorio  # noqa: E402
+from src.relatorio_ui import render_relatorio_simulacao  # noqa: E402
 from src.sessao_ui import SNAPSHOT_PENDENTE_KEY, aplicar_pendentes_sidebar  # noqa: E402
 from src.ui import (  # noqa: E402
     brl,
@@ -279,6 +281,17 @@ k4.metric("Risco", rotulo_kpi_risco(decisao))
 
 cor = cor_semaforo(decisao.semaforo)
 st.markdown(html_banner_semaforo(decisao, cor), unsafe_allow_html=True)
+
+st.subheader("Relatório da simulação")
+relatorio = montar_relatorio(
+    dados=dados,
+    troca=troca,
+    decisao=decisao,
+    limites=limites,
+    explicacao=explicacao,
+    fipe=fipe_sessao,
+)
+render_relatorio_simulacao(relatorio)
 
 render_consulta_fipe(valor_usada, troca.custo_extra_vs_ideal)
 

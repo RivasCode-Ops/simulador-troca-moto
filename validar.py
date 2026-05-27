@@ -20,6 +20,8 @@ from src.fipe_analise import analisar_fipe_vs_venda  # noqa: E402
 from src import persistencia as persistencia  # noqa: E402
 from src.historico import comparar_duas, comparar_duas_para_exibicao  # noqa: E402
 from src.operacao import DadosOperacao, simular_troca  # noqa: E402
+from src.decisao import explicar_custo_extra  # noqa: E402
+from src.relatorio import montar_relatorio  # noqa: E402
 from src.ui import (  # noqa: E402
     brl,
     mensagem_banner_resumo,
@@ -237,6 +239,34 @@ def test_comparacao_ab_exibicao() -> None:
     _ok("Comparação A/B formatada (sem Styler em strings)")
 
 
+def test_relatorio_simulacao() -> None:
+    d = DadosOperacao(prazo_compra_meses=36, taxas_contrato_compra=500.0)
+    t = simular_troca(d)
+    dec = avaliar_decisao(t, LimitesDecisao())
+    exp = explicar_custo_extra(t)
+    rel = montar_relatorio(
+        dados=d,
+        troca=t,
+        decisao=dec,
+        limites=LimitesDecisao(),
+        explicacao=exp,
+        fipe=None,
+    )
+    if len(rel.kpis) < 4:
+        _fail("relatório deve ter pelo menos 4 KPIs")
+    if not rel.resumo_executivo or "Custo extra" not in rel.resumo_executivo:
+        _fail("resumo executivo incompleto")
+    if not rel.recomendacoes:
+        _fail("relatório deve trazer recomendações")
+    md = rel.para_markdown()
+    if "Relatório da simulação" not in md or "KPIs principais" not in md:
+        _fail("markdown do relatório incompleto")
+    payload = rel.para_dict()
+    if payload.get("semaforo") != dec.semaforo.value:
+        _fail("dict do relatório com semáforo inconsistente")
+    _ok("Relatório executivo montado (dict, markdown e seções)")
+
+
 def test_banner_semaforo() -> None:
     loja = avaliar_decisao(simular_troca(DadosOperacao(entrada_loja=35_000)), LimitesDecisao())
     base = avaliar_decisao(simular_troca(DadosOperacao()), LimitesDecisao())
@@ -312,6 +342,7 @@ def main() -> int:
         ("Comparação A/B", test_comparacao_ab_exibicao),
         ("Taxa efetiva a.a.", test_taxa_efetiva_anual),
         ("Score /100", test_score_normalizado),
+        ("Relatório simulação", test_relatorio_simulacao),
         ("Banner semáforo", test_banner_semaforo),
         ("Progresso / pct CE", test_progresso_pct_ce),
         ("Cenário base", test_cenario_base),
